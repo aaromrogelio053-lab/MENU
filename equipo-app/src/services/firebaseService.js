@@ -12,22 +12,106 @@ import {
   where,
   orderBy
 } from 'firebase/firestore';
-import { db } from '../../firebaseConfig';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db, storage } from '../../firebaseConfig';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// ============================================
+// REPARTIDORES - DISPONIBILIDAD
+// ============================================
+
+export const actualizarDisponibilidadRepartidor = async (repartidorId, disponible) => {
+  try {
+    const repartidorRef = doc(db, 'repartidores', repartidorId);
+    
+    await setDoc(repartidorRef, {
+      repartidorId: repartidorId,
+      disponible: disponible,
+      ultimaActualizacion: Timestamp.now(),
+      pedidosCompletadosHoy: 0,
+      tiempoEspera: Timestamp.now(),
+    }, { merge: true });
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Error al actualizar disponibilidad:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+export const obtenerDisponibilidadRepartidor = async (repartidorId) => {
+  try {
+    const repartidorDoc = await getDoc(doc(db, 'repartidores', repartidorId));
+    
+    if (repartidorDoc.exists()) {
+      return { success: true, disponible: repartidorDoc.data().disponible || false };
+    } else {
+      return { success: true, disponible: false };
+    }
+  } catch (error) {
+    console.error('Error al obtener disponibilidad:', error);
+    return { success: false, error: error.message };
+  }
+};
 
 // ============================================
 // PEDIDOS - REPARTIDOR
 // ============================================
 
+export const rechazarPedidoRepartidor = async (pedidoId, repartidorId) => {
+  try {
+    // Guardar en AsyncStorage que este repartidor rechazó este pedido
+    const rechazadosKey = `pedidos_rechazados_${repartidorId}`;
+    const rechazadosStr = await AsyncStorage.getItem(rechazadosKey);
+    const rechazados = rechazadosStr ? JSON.parse(rechazadosStr) : [];
+    
+    if (!rechazados.includes(pedidoId)) {
+      rechazados.push(pedidoId);
+      await AsyncStorage.setItem(rechazadosKey, JSON.stringify(rechazados));
+    }
+    
+    // Actualizar el pedido en Firebase para marcar el rechazo
+    const pedidoRef = doc(db, 'pedidos', pedidoId);
+    const pedidoDoc = await getDoc(pedidoRef);
+    
+    if (pedidoDoc.exists()) {
+      const pedidoData = pedidoDoc.data();
+      const rechazadosPor = pedidoData.rechazadoPor || [];
+      
+      if (!rechazadosPor.includes(repartidorId)) {
+        rechazadosPor.push(repartidorId);
+        
+        await updateDoc(pedidoRef, {
+          rechazadoPor: rechazadosPor,
+          ultimoRechazo: Timestamp.now(),
+        });
+      }
+    }
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Error al rechazar pedido:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 export const escucharPedidosDisponibles = (callback) => {
   try {
     const unsubscribe = onSnapshot(
       collection(db, 'pedidos'),
-      (snapshot) => {
+      async (snapshot) => {
+        const repartidorId = await AsyncStorage.getItem('repartidorId');
+        const rechazadosKey = `pedidos_rechazados_${repartidorId}`;
+        const rechazadosStr = await AsyncStorage.getItem(rechazadosKey);
+        const rechazados = rechazadosStr ? JSON.parse(rechazadosStr) : [];
+        
         const pedidos = [];
         snapshot.forEach((doc) => {
           const data = doc.data();
-          // Pedidos sin repartidor y no cancelados
-          if (!data.repartidorId && data.estado !== 'cancelado') {
+          // Pedidos sin repartidor, no cancelados, y no rechazados por este repartidor
+          if (!data.repartidorId && 
+              data.estado !== 'cancelado' && 
+              !rechazados.includes(doc.id)) {
             pedidos.push({
               id: doc.id,
               ...data
@@ -35,7 +119,6 @@ export const escucharPedidosDisponibles = (callback) => {
           }
         });
         
-        // Ordenar por fecha
         pedidos.sort((a, b) => {
           const timeA = a.createdAt?.toMillis() || 0;
           const timeB = b.createdAt?.toMillis() || 0;
@@ -65,7 +148,6 @@ export const escucharMisPedidosRepartidor = (repartidorId, callback) => {
         const pedidos = [];
         snapshot.forEach((doc) => {
           const data = doc.data();
-          // Solo pedidos asignados a este repartidor y no completados
           if (data.repartidorId === repartidorId && 
               data.estado !== 'entregado' && 
               data.estado !== 'cancelado') {
@@ -108,7 +190,6 @@ export const aceptarPedido = async (pedidoId, repartidorId, repartidorNombre) =>
     
     const pedidoData = pedidoDoc.data();
     
-    // Verificar que el pedido no esté ya asignado
     if (pedidoData.repartidorId) {
       return { success: false, error: 'Este pedido ya fue asignado a otro repartidor' };
     }
@@ -343,6 +424,31 @@ export const escucharTodosPedidos = (callback) => {
   }
 };
 
+export const obtenerTodosPedidos = async () => {
+  try {
+    const pedidosSnapshot = await getDocs(collection(db, 'pedidos'));
+    const pedidos = [];
+    
+    pedidosSnapshot.forEach((doc) => {
+      pedidos.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+    
+    pedidos.sort((a, b) => {
+      const timeA = a.createdAt?.toMillis() || 0;
+      const timeB = b.createdAt?.toMillis() || 0;
+      return timeB - timeA;
+    });
+    
+    return { success: true, data: pedidos };
+  } catch (error) {
+    console.error('Error al obtener pedidos:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 export const actualizarEstadoPedido = async (pedidoId, nuevoEstado, motivo = '') => {
   try {
     const pedidoRef = doc(db, 'pedidos', pedidoId);
@@ -455,16 +561,16 @@ export const escucharMenuDelDia = (fecha, callback) => {
   try {
     const unsubscribe = onSnapshot(
       doc(db, 'menus', fecha),
-      (doc) => {
-        if (doc.exists()) {
-          callback(doc.data());
+      (docSnapshot) => {
+        if (docSnapshot.exists()) {
+          callback({ success: true, data: docSnapshot.data() });
         } else {
-          callback(null);
+          callback({ success: true, data: null });
         }
       },
       (error) => {
         console.error('Error al escuchar menú:', error);
-        callback(null);
+        callback({ success: false, error: error.message });
       }
     );
     
@@ -503,6 +609,25 @@ export const actualizarMenu = async (fecha, platos) => {
     return { success: true };
   } catch (error) {
     console.error('Error al actualizar menú:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+export const subirImagenPlato = async (uri, nombrePlato) => {
+  try {
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    
+    const timestamp = Date.now();
+    const nombreArchivo = `platos/${timestamp}_${nombrePlato.replace(/\s/g, '_')}.jpg`;
+    const storageRef = ref(storage, nombreArchivo);
+    
+    await uploadBytes(storageRef, blob);
+    const url = await getDownloadURL(storageRef);
+    
+    return { success: true, url: url };
+  } catch (error) {
+    console.error('Error al subir imagen:', error);
     return { success: false, error: error.message };
   }
 };

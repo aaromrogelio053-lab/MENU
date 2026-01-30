@@ -4,40 +4,26 @@ import {
   Text,
   StyleSheet,
   FlatList,
-  TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
+  TouchableOpacity,
   Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { escucharPedidosUsuario } from '../services/firebaseService';
+import { escucharMisPedidos, cancelarPedido } from '../services/firebaseService';
 
-const OrdersScreen = ({ navigation }) => {
-  const [pedidos, setPedidos] = useState([]);
+export default function OrdersScreen({ navigation }) {
+  const [pedidosTodos, setPedidosTodos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [filtro, setFiltro] = useState('todos'); // 'todos', 'activos', 'completados'
+  const [tabActivo, setTabActivo] = useState('activos'); // 'activos' o 'historial'
+  const [paginaActual, setPaginaActual] = useState(1);
+  
+  const PEDIDOS_POR_PAGINA = 10;
+  let unsubscribe = null;
 
   useEffect(() => {
-    let unsubscribe;
-
-    const cargarPedidos = async () => {
-      try {
-        const userId = await AsyncStorage.getItem('userId');
-        if (userId) {
-          unsubscribe = escucharPedidosUsuario(userId, (pedidosActualizados) => {
-            setPedidos(pedidosActualizados);
-            setLoading(false);
-            setRefreshing(false);
-          });
-        }
-      } catch (error) {
-        console.error('Error al cargar pedidos:', error);
-        setLoading(false);
-        setRefreshing(false);
-      }
-    };
-
     cargarPedidos();
 
     return () => {
@@ -47,314 +33,369 @@ const OrdersScreen = ({ navigation }) => {
     };
   }, []);
 
+  // Resetear página cuando cambia de tab
+  useEffect(() => {
+    setPaginaActual(1);
+  }, [tabActivo]);
+
+  const cargarPedidos = async () => {
+    try {
+      const userId = await AsyncStorage.getItem('userId');
+      if (userId) {
+        unsubscribe = escucharMisPedidos(userId, (pedidosActualizados) => {
+          setPedidosTodos(pedidosActualizados);
+          setLoading(false);
+          setRefreshing(false);
+        });
+      } else {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    } catch (error) {
+      console.error('Error al cargar pedidos:', error);
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
   const onRefresh = () => {
     setRefreshing(true);
+    cargarPedidos();
   };
 
-  const getEstadoInfo = (estado) => {
-    const estados = {
-      'pendiente': {
-        label: 'Pendiente',
-        color: '#FFA726',
-        icon: '⏳',
-        mensaje: 'Esperando confirmación del restaurante'
-      },
-      'confirmado': {
-        label: 'Confirmado',
-        color: '#42A5F5',
-        icon: '✓',
-        mensaje: 'El restaurante confirmó tu pedido'
-      },
-      'en_preparacion': {
-        label: 'En Preparación',
-        color: '#66BB6A',
-        icon: '👨‍🍳',
-        mensaje: 'Tu pedido está siendo preparado'
-      },
-      'listo': {
-        label: 'Listo',
-        color: '#26A69A',
-        icon: '📦',
-        mensaje: 'Tu pedido está listo para entrega'
-      },
-      'en_camino': {
-        label: 'En Camino',
-        color: '#7E57C2',
-        icon: '🚴',
-        mensaje: 'El repartidor está en camino'
-      },
-      'entregado': {
-        label: 'Entregado',
-        color: '#66BB6A',
-        icon: '✅',
-        mensaje: '¡Pedido entregado! Buen provecho'
-      },
-      'cancelado': {
-        label: 'Cancelado',
-        color: '#EF5350',
-        icon: '❌',
-        mensaje: 'Este pedido fue cancelado'
-      }
+  // Mapear estados internos a estados simplificados
+  const getEstadoSimplificado = (estado) => {
+    const mapeo = {
+      'pendiente': 'pendiente',
+      'confirmado': 'confirmado',
+      'en_preparacion': 'confirmado',
+      'listo': 'confirmado',
+      'en_camino': 'confirmado',
+      'entregado': 'entregado',
+      'cancelado': 'cancelado',
     };
-    
-    return estados[estado] || estados['pendiente'];
+    return mapeo[estado] || 'pendiente';
   };
 
+  // Filtrar pedidos según tab activo
   const getPedidosFiltrados = () => {
-    if (filtro === 'activos') {
-      return pedidos.filter(p => 
-        p.estado !== 'entregado' && p.estado !== 'cancelado'
-      );
-    } else if (filtro === 'completados') {
-      return pedidos.filter(p => 
-        p.estado === 'entregado' || p.estado === 'cancelado'
-      );
+    if (tabActivo === 'activos') {
+      // Pedidos activos: pendiente + confirmado
+      return pedidosTodos.filter(pedido => {
+        const estadoSimple = getEstadoSimplificado(pedido.estado);
+        return estadoSimple === 'pendiente' || estadoSimple === 'confirmado';
+      });
+    } else {
+      // Historial: entregado + cancelado
+      return pedidosTodos.filter(pedido => {
+        const estadoSimple = getEstadoSimplificado(pedido.estado);
+        return estadoSimple === 'entregado' || estadoSimple === 'cancelado';
+      });
     }
-    return pedidos;
   };
 
-  const formatearFecha = (timestamp) => {
-    if (!timestamp) return '';
-    
-    const fecha = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-    const ahora = new Date();
-    const diferencia = ahora - fecha;
-    const minutos = Math.floor(diferencia / 60000);
-    
-    if (minutos < 1) return 'Ahora mismo';
-    if (minutos < 60) return `Hace ${minutos} min`;
-    
-    const horas = Math.floor(minutos / 60);
-    if (horas < 24) return `Hace ${horas} hora${horas > 1 ? 's' : ''}`;
-    
-    const dias = Math.floor(horas / 24);
-    return `Hace ${dias} día${dias > 1 ? 's' : ''}`;
+  // Obtener pedidos de la página actual
+  const getPedidosPaginados = () => {
+    const pedidosFiltrados = getPedidosFiltrados();
+    const inicio = (paginaActual - 1) * PEDIDOS_POR_PAGINA;
+    const fin = inicio + PEDIDOS_POR_PAGINA;
+    return pedidosFiltrados.slice(inicio, fin);
   };
 
-  const calcularTiempoEstimado = (pedido) => {
-    if (pedido.estado === 'entregado' || pedido.estado === 'cancelado') {
-      return null;
-    }
-    
-    if (pedido.estado === 'en_camino') {
-      return '10-15 min';
-    } else if (pedido.estado === 'listo') {
-      return '5-10 min';
-    } else if (pedido.estado === 'en_preparacion') {
-      return '15-25 min';
-    } else if (pedido.estado === 'confirmado') {
-      return '20-30 min';
-    } else if (pedido.estado === 'pendiente') {
-      return '30-40 min';
-    }
-    
-    return null;
+  // Calcular total de páginas
+  const getTotalPaginas = () => {
+    const pedidosFiltrados = getPedidosFiltrados();
+    return Math.ceil(pedidosFiltrados.length / PEDIDOS_POR_PAGINA);
   };
 
-  const renderPedido = ({ item }) => {
-    const estadoInfo = getEstadoInfo(item.estado);
-    const tiempoEstimado = calcularTiempoEstimado(item);
-    const cantidadItems = item.items?.reduce((sum, i) => sum + i.cantidad, 0) || 0;
+  const handleCancelarPedido = (pedidoId, estadoActual) => {
+    const estadoSimple = getEstadoSimplificado(estadoActual);
+    
+    if (estadoSimple !== 'pendiente' && estadoSimple !== 'confirmado') {
+      Alert.alert('No se puede cancelar', 'Este pedido ya no se puede cancelar');
+      return;
+    }
 
-    return (
-      <TouchableOpacity
-        style={styles.pedidoCard}
-        onPress={() => {
-          Alert.alert(
-            `Pedido #${item.id.slice(-6).toUpperCase()}`,
-            `Estado: ${estadoInfo.label}\n${estadoInfo.mensaje}\n\nProductos:\n${item.items?.map(i => `• ${i.cantidad}x ${i.nombre}`).join('\n')}\n\nTotal: S/ ${item.total.toFixed(2)}\nMétodo de pago: ${item.metodoPago || 'Efectivo'}${item.motivoCancelacion ? `\n\nMotivo de cancelación:\n${item.motivoCancelacion}` : ''}`
-          );
-        }}
-      >
-        {/* Header del pedido */}
-        <View style={styles.pedidoHeader}>
-          <View style={styles.pedidoHeaderLeft}>
-            <Text style={styles.pedidoId}>#{item.id.slice(-6).toUpperCase()}</Text>
-            <Text style={styles.pedidoFecha}>{formatearFecha(item.createdAt)}</Text>
-          </View>
-          <View style={[styles.estadoBadge, { backgroundColor: estadoInfo.color }]}>
-            <Text style={styles.estadoIcon}>{estadoInfo.icon}</Text>
-            <Text style={styles.estadoText}>{estadoInfo.label}</Text>
-          </View>
-        </View>
-
-        {/* Info del pedido */}
-        <View style={styles.pedidoInfo}>
-          <Text style={styles.pedidoMensaje}>{estadoInfo.mensaje}</Text>
-          
-          {tiempoEstimado && (
-            <View style={styles.tiempoContainer}>
-              <Text style={styles.tiempoIcon}>⏱️</Text>
-              <Text style={styles.tiempoText}>
-                Tiempo estimado: <Text style={styles.tiempoValue}>{tiempoEstimado}</Text>
-              </Text>
-            </View>
-          )}
-
-          {item.motivoCancelacion && (
-            <View style={styles.motivoCancelacion}>
-              <Text style={styles.motivoCancelacionText}>
-                Motivo: {item.motivoCancelacion}
-              </Text>
-            </View>
-          )}
-
-          <View style={styles.pedidoDetalles}>
-            <View style={styles.detalleItem}>
-              <Text style={styles.detalleLabel}>Productos:</Text>
-              <Text style={styles.detalleValue}>{cantidadItems} items</Text>
-            </View>
-            <View style={styles.detalleItem}>
-              <Text style={styles.detalleLabel}>Total:</Text>
-              <Text style={styles.detalleValueTotal}>S/ {item.total.toFixed(2)}</Text>
-            </View>
-          </View>
-
-          <View style={styles.pedidoPago}>
-            <Text style={styles.pedidoPagoText}>
-              Pago: {item.metodoPago === 'Yape' ? '📱' : '💵'} {item.metodoPago || 'Efectivo'}
-            </Text>
-          </View>
-
-          {item.repartidorNombre && item.estado !== 'cancelado' && (
-            <View style={styles.repartidorInfo}>
-              <Text style={styles.repartidorText}>
-                🚴 Repartidor: <Text style={styles.repartidorNombre}>{item.repartidorNombre}</Text>
-              </Text>
-            </View>
-          )}
-        </View>
-
-        {/* Progreso visual */}
-        {item.estado !== 'cancelado' && item.estado !== 'entregado' && (
-          <View style={styles.progresoContainer}>
-            <View style={styles.progresoBarContainer}>
-              <View 
-                style={[
-                  styles.progresoBar, 
-                  { 
-                    width: getPorcentajeProgreso(item.estado),
-                    backgroundColor: estadoInfo.color 
-                  }
-                ]} 
-              />
-            </View>
-            <Text style={styles.progresoText}>
-              {getTextoProgreso(item.estado)}
-            </Text>
-          </View>
-        )}
-      </TouchableOpacity>
+    Alert.alert(
+      'Cancelar Pedido',
+      '¿Estás seguro de que quieres cancelar este pedido?',
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Sí, cancelar',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await cancelarPedido(pedidoId, 'Cancelado por el cliente');
+            if (result.success) {
+              Alert.alert('✓', 'Pedido cancelado');
+            } else {
+              Alert.alert('Error', 'No se pudo cancelar el pedido');
+            }
+          },
+        },
+      ]
     );
   };
 
-  const getPorcentajeProgreso = (estado) => {
-    const progresos = {
-      'pendiente': '20%',
-      'confirmado': '40%',
-      'en_preparacion': '60%',
-      'listo': '80%',
-      'en_camino': '90%',
-      'entregado': '100%',
+  const getEstadoConfig = (estado, estadoSimplificado) => {
+    // Configuración visual según estado simplificado
+    const configSimple = {
+      pendiente: { 
+        color: '#FF9800', 
+        texto: 'Pendiente', 
+        icono: '⏳',
+        descripcion: 'Esperando confirmación del restaurante'
+      },
+      confirmado: { 
+        color: '#2196F3', 
+        texto: 'Confirmado', 
+        icono: '✓',
+        descripcion: getDescripcionConfirmado(estado)
+      },
+      entregado: { 
+        color: '#4CAF50', 
+        texto: 'Entregado', 
+        icono: '✓',
+        descripcion: 'Pedido entregado exitosamente'
+      },
+      cancelado: { 
+        color: '#F44336', 
+        texto: 'Cancelado', 
+        icono: '✕',
+        descripcion: 'Pedido cancelado'
+      },
     };
-    return progresos[estado] || '0%';
+
+    return configSimple[estadoSimplificado] || { 
+      color: '#666', 
+      texto: estado, 
+      icono: '•',
+      descripcion: ''
+    };
   };
 
-  const getTextoProgreso = (estado) => {
-    const textos = {
-      'pendiente': 'Esperando confirmación',
-      'confirmado': 'Confirmado → Preparación',
-      'en_preparacion': 'Preparando → Listo',
-      'listo': 'Listo → En camino',
-      'en_camino': 'En camino → Entrega',
+  const getDescripcionConfirmado = (estadoInterno) => {
+    const descripciones = {
+      'confirmado': 'El restaurante confirmó tu pedido',
+      'en_preparacion': 'Tu pedido se está preparando',
+      'listo': 'Tu pedido está listo para entrega',
+      'en_camino': 'El repartidor va hacia ti',
     };
-    return textos[estado] || '';
+    return descripciones[estadoInterno] || 'Pedido en proceso';
   };
 
-  const pedidosFiltrados = getPedidosFiltrados();
-  const contadores = {
-    todos: pedidos.length,
-    activos: pedidos.filter(p => p.estado !== 'entregado' && p.estado !== 'cancelado').length,
-    completados: pedidos.filter(p => p.estado === 'entregado' || p.estado === 'cancelado').length,
+  const renderPedido = ({ item }) => {
+    const estadoSimplificado = getEstadoSimplificado(item.estado);
+    const estadoConfig = getEstadoConfig(item.estado, estadoSimplificado);
+    const puedeCancel = estadoSimplificado === 'pendiente' || estadoSimplificado === 'confirmado';
+
+    return (
+      <View style={styles.pedidoCard}>
+        <View style={styles.pedidoHeader}>
+          <View>
+            <Text style={styles.pedidoId}>#{item.id.substring(0, 8).toUpperCase()}</Text>
+            <Text style={styles.pedidoFecha}>
+              {item.createdAt?.toDate().toLocaleDateString('es-PE', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </Text>
+          </View>
+          <View style={styles.pedidoRight}>
+            <Text style={styles.pedidoTotal}>S/ {item.total?.toFixed(2)}</Text>
+            <View style={[styles.estadoBadge, { backgroundColor: estadoConfig.color }]}>
+              <Text style={styles.estadoTexto}>
+                {estadoConfig.icono} {estadoConfig.texto}
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.pedidoBody}>
+          <Text style={styles.estadoDescripcion}>{estadoConfig.descripcion}</Text>
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>📍 Dirección:</Text>
+            <Text style={styles.infoText}>{item.direccion}</Text>
+          </View>
+
+          {item.referencia ? (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>📌 Referencia:</Text>
+              <Text style={styles.infoText}>{item.referencia}</Text>
+            </View>
+          ) : null}
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>🍽️ Productos:</Text>
+          </View>
+          {item.items?.map((producto, index) => (
+            <View key={index} style={styles.productoRow}>
+              <Text style={styles.productoText}>
+                {producto.cantidad}x {producto.nombre}
+              </Text>
+              <Text style={styles.productoPrice}>
+                S/ {(producto.precio * producto.cantidad).toFixed(2)}
+              </Text>
+            </View>
+          ))}
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>💳 Pago:</Text>
+            <Text style={styles.infoText}>{item.metodoPago}</Text>
+          </View>
+
+          {item.repartidorNombre && (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>🚚 Repartidor:</Text>
+              <Text style={styles.infoText}>{item.repartidorNombre}</Text>
+            </View>
+          )}
+
+          {item.notas ? (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>📝 Notas:</Text>
+              <Text style={styles.infoText}>{item.notas}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        {puedeCancel && (
+          <TouchableOpacity
+            style={styles.cancelButton}
+            onPress={() => handleCancelarPedido(item.id, item.estado)}
+          >
+            <Text style={styles.cancelButtonText}>Cancelar Pedido</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    );
   };
 
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#8BC34A" />
+        <ActivityIndicator size="large" color="#FF6B35" />
         <Text style={styles.loadingText}>Cargando pedidos...</Text>
       </View>
     );
   }
 
+  const pedidosPaginados = getPedidosPaginados();
+  const totalPaginas = getTotalPaginas();
+  const pedidosActivos = pedidosTodos.filter(p => {
+    const est = getEstadoSimplificado(p.estado);
+    return est === 'pendiente' || est === 'confirmado';
+  }).length;
+  const pedidosHistorial = pedidosTodos.filter(p => {
+    const est = getEstadoSimplificado(p.estado);
+    return est === 'entregado' || est === 'cancelado';
+  }).length;
+
   return (
-    <View style={styles.container}>
-      {/* Filtros */}
-      <View style={styles.filtrosContainer}>
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Mis Pedidos</Text>
+      </View>
+
+      {/* TABS */}
+      <View style={styles.tabs}>
         <TouchableOpacity
-          style={[styles.filtroButton, filtro === 'todos' && styles.filtroButtonActive]}
-          onPress={() => setFiltro('todos')}
+          style={[styles.tab, tabActivo === 'activos' && styles.tabActivo]}
+          onPress={() => setTabActivo('activos')}
         >
-          <Text style={[styles.filtroText, filtro === 'todos' && styles.filtroTextActive]}>
-            Todos ({contadores.todos})
+          <Text style={[styles.tabText, tabActivo === 'activos' && styles.tabTextoActivo]}>
+            🔥 Activos ({pedidosActivos})
           </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.filtroButton, filtro === 'activos' && styles.filtroButtonActive]}
-          onPress={() => setFiltro('activos')}
+          style={[styles.tab, tabActivo === 'historial' && styles.tabActivo]}
+          onPress={() => setTabActivo('historial')}
         >
-          <Text style={[styles.filtroText, filtro === 'activos' && styles.filtroTextActive]}>
-            ✓ Activos ({contadores.activos})
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.filtroButton, filtro === 'completados' && styles.filtroButtonActive]}
-          onPress={() => setFiltro('completados')}
-        >
-          <Text style={[styles.filtroText, filtro === 'completados' && styles.filtroTextActive]}>
-            Completados ({contadores.completados})
+          <Text style={[styles.tabText, tabActivo === 'historial' && styles.tabTextoActivo]}>
+            📜 Historial ({pedidosHistorial})
           </Text>
         </TouchableOpacity>
       </View>
 
-      {/* Lista de pedidos */}
-      {pedidosFiltrados.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyIcon}>📦</Text>
-          <Text style={styles.emptyText}>
-            {filtro === 'activos' 
-              ? 'No tienes pedidos activos' 
-              : filtro === 'completados'
-              ? 'Aún no tienes pedidos completados'
-              : 'No has realizado ningún pedido'}
-          </Text>
+      {/* LISTA DE PEDIDOS */}
+      <FlatList
+        data={pedidosPaginados}
+        renderItem={renderPedido}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={['#FF6B35']}
+          />
+        }
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyIcon}>
+              {tabActivo === 'activos' ? '📦' : '📜'}
+            </Text>
+            <Text style={styles.emptyTitle}>
+              {tabActivo === 'activos' ? 'No tienes pedidos activos' : 'No hay historial'}
+            </Text>
+            <Text style={styles.emptySubtitle}>
+              {tabActivo === 'activos' 
+                ? 'Realiza tu primer pedido desde el menú' 
+                : 'Aquí aparecerán tus pedidos completados'}
+            </Text>
+            {tabActivo === 'activos' && (
+              <TouchableOpacity
+                style={styles.emptyButton}
+                onPress={() => navigation.navigate('Home')}
+              >
+                <Text style={styles.emptyButtonText}>Ver Menú</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        }
+      />
+
+      {/* PAGINACIÓN */}
+      {totalPaginas > 1 && (
+        <View style={styles.paginacionContainer}>
           <TouchableOpacity
-            style={styles.emptyButton}
-            onPress={() => navigation.navigate('Home')}
+            style={[styles.paginacionButton, paginaActual === 1 && styles.paginacionButtonDisabled]}
+            onPress={() => setPaginaActual(prev => Math.max(1, prev - 1))}
+            disabled={paginaActual === 1}
           >
-            <Text style={styles.emptyButtonText}>Ver Menú</Text>
+            <Text style={[styles.paginacionButtonText, paginaActual === 1 && styles.paginacionButtonTextDisabled]}>
+              ← Anterior
+            </Text>
+          </TouchableOpacity>
+
+          <View style={styles.paginacionInfo}>
+            <Text style={styles.paginacionText}>
+              Página {paginaActual} de {totalPaginas}
+            </Text>
+            <Text style={styles.paginacionSubtext}>
+              ({getPedidosFiltrados().length} pedidos)
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.paginacionButton, paginaActual === totalPaginas && styles.paginacionButtonDisabled]}
+            onPress={() => setPaginaActual(prev => Math.min(totalPaginas, prev + 1))}
+            disabled={paginaActual === totalPaginas}
+          >
+            <Text style={[styles.paginacionButtonText, paginaActual === totalPaginas && styles.paginacionButtonTextDisabled]}>
+              Siguiente →
+            </Text>
           </TouchableOpacity>
         </View>
-      ) : (
-        <FlatList
-          data={pedidosFiltrados}
-          renderItem={renderPedido}
-          keyExtractor={item => item.id}
-          contentContainerStyle={styles.listContainer}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              colors={['#8BC34A']}
-            />
-          }
-        />
       )}
-    </View>
+    </SafeAreaView>
   );
-};
+}
 
 const styles = StyleSheet.create({
   container: {
@@ -365,47 +406,56 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#F5F5F5',
   },
   loadingText: {
     marginTop: 10,
     fontSize: 16,
     color: '#666',
   },
-  filtrosContainer: {
-    flexDirection: 'row',
+  header: {
     backgroundColor: '#FFF',
-    padding: 15,
+    paddingHorizontal: 20,
+    paddingVertical: 15,
     borderBottomWidth: 1,
     borderBottomColor: '#EEE',
+    elevation: 2,
   },
-  filtroButton: {
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  tabs: {
+    flexDirection: 'row',
+    backgroundColor: '#FFF',
+    borderBottomWidth: 2,
+    borderBottomColor: '#F0F0F0',
+  },
+  tab: {
     flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 15,
-    borderRadius: 20,
-    marginHorizontal: 5,
-    backgroundColor: '#F5F5F5',
+    paddingVertical: 16,
     alignItems: 'center',
   },
-  filtroButtonActive: {
-    backgroundColor: '#8BC34A',
+  tabActivo: {
+    borderBottomWidth: 3,
+    borderBottomColor: '#FF6B35',
   },
-  filtroText: {
+  tabText: {
     fontSize: 14,
     color: '#666',
-    fontWeight: '600',
+    fontWeight: '500',
   },
-  filtroTextActive: {
-    color: '#FFF',
+  tabTextoActivo: {
+    color: '#FF6B35',
+    fontWeight: 'bold',
   },
-  listContainer: {
+  listContent: {
     padding: 15,
   },
   pedidoCard: {
     backgroundColor: '#FFF',
     borderRadius: 12,
-    padding: 15,
+    padding: 16,
     marginBottom: 15,
     elevation: 3,
     shadowColor: '#000',
@@ -416,163 +466,116 @@ const styles = StyleSheet.create({
   pedidoHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
     marginBottom: 12,
     paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#F0F0F0',
   },
-  pedidoHeaderLeft: {
-    flex: 1,
-  },
   pedidoId: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
     color: '#333',
   },
   pedidoFecha: {
     fontSize: 12,
     color: '#999',
-    marginTop: 2,
+    marginTop: 4,
+  },
+  pedidoRight: {
+    alignItems: 'flex-end',
+  },
+  pedidoTotal: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#FF6B35',
+    marginBottom: 8,
   },
   estadoBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 15,
+    borderRadius: 12,
   },
-  estadoIcon: {
-    fontSize: 14,
-    marginRight: 5,
-  },
-  estadoText: {
+  estadoTexto: {
     color: '#FFF',
     fontSize: 12,
     fontWeight: 'bold',
   },
-  pedidoInfo: {
-    marginBottom: 10,
-  },
-  pedidoMensaje: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 10,
-  },
-  tiempoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFF3E0',
-    padding: 10,
-    borderRadius: 8,
-    marginBottom: 10,
-  },
-  tiempoIcon: {
-    fontSize: 16,
-    marginRight: 8,
-  },
-  tiempoText: {
-    fontSize: 13,
-    color: '#E65100',
-  },
-  tiempoValue: {
-    fontWeight: 'bold',
-  },
-  motivoCancelacion: {
-    backgroundColor: '#FFEBEE',
-    padding: 10,
-    borderRadius: 8,
-    marginBottom: 10,
-  },
-  motivoCancelacionText: {
-    fontSize: 13,
-    color: '#C62828',
-  },
-  pedidoDetalles: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  detalleItem: {
-    flex: 1,
-  },
-  detalleLabel: {
-    fontSize: 12,
-    color: '#999',
-    marginBottom: 2,
-  },
-  detalleValue: {
-    fontSize: 14,
-    color: '#333',
-    fontWeight: '600',
-  },
-  detalleValueTotal: {
-    fontSize: 18,
-    color: '#FF6B35',
-    fontWeight: 'bold',
-  },
-  pedidoPago: {
-    marginTop: 5,
-  },
-  pedidoPagoText: {
-    fontSize: 13,
-    color: '#666',
-  },
-  repartidorInfo: {
-    backgroundColor: '#E8F5E9',
-    padding: 8,
-    borderRadius: 6,
+  pedidoBody: {
     marginTop: 8,
   },
-  repartidorText: {
-    fontSize: 13,
-    color: '#2E7D32',
+  estadoDescripcion: {
+    fontSize: 14,
+    color: '#666',
+    fontStyle: 'italic',
+    marginBottom: 12,
   },
-  repartidorNombre: {
+  infoRow: {
+    marginTop: 8,
+  },
+  infoLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
+    marginBottom: 4,
+  },
+  infoText: {
+    fontSize: 14,
+    color: '#333',
+  },
+  productoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+    paddingLeft: 16,
+  },
+  productoText: {
+    fontSize: 14,
+    color: '#333',
+    flex: 1,
+  },
+  productoPrice: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FF6B35',
+  },
+  cancelButton: {
+    marginTop: 16,
+    paddingVertical: 12,
+    backgroundColor: '#F44336',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    color: '#FFF',
+    fontSize: 14,
     fontWeight: 'bold',
   },
-  progresoContainer: {
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#F0F0F0',
-  },
-  progresoBarContainer: {
-    height: 6,
-    backgroundColor: '#E0E0E0',
-    borderRadius: 3,
-    overflow: 'hidden',
-    marginBottom: 6,
-  },
-  progresoBar: {
-    height: '100%',
-    borderRadius: 3,
-  },
-  progresoText: {
-    fontSize: 11,
-    color: '#999',
-    textAlign: 'center',
-  },
   emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    justifyContent: 'center',
+    paddingVertical: 80,
   },
   emptyIcon: {
-    fontSize: 60,
-    marginBottom: 15,
+    fontSize: 80,
+    marginBottom: 20,
   },
-  emptyText: {
-    fontSize: 16,
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    fontSize: 14,
     color: '#666',
+    marginBottom: 30,
     textAlign: 'center',
-    marginBottom: 25,
+    paddingHorizontal: 40,
   },
   emptyButton: {
-    backgroundColor: '#8BC34A',
+    backgroundColor: '#FF6B35',
     paddingHorizontal: 30,
-    paddingVertical: 12,
+    paddingVertical: 15,
     borderRadius: 25,
   },
   emptyButtonText: {
@@ -580,6 +583,45 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
+  paginacionContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#FFF',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#EEE',
+    elevation: 4,
+  },
+  paginacionButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#FF6B35',
+  },
+  paginacionButtonDisabled: {
+    backgroundColor: '#E0E0E0',
+  },
+  paginacionButtonText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  paginacionButtonTextDisabled: {
+    color: '#999',
+  },
+  paginacionInfo: {
+    alignItems: 'center',
+  },
+  paginacionText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  paginacionSubtext: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
 });
-
-export default OrdersScreen;

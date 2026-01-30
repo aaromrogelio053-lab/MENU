@@ -15,14 +15,12 @@ import {
   obtenerCarrito,
   actualizarCantidadCarrito,
   limpiarCarrito,
-  crearPedido,
 } from '../services/firebaseService';
 
 const CartScreen = ({ navigation }) => {
   const [carrito, setCarrito] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [creandoPedido, setCreandoPedido] = useState(false);
-  const [metodoPago, setMetodoPago] = useState('efectivo'); // 'efectivo' o 'yape'
+  const [metodoPago, setMetodoPago] = useState('efectivo');
 
   useEffect(() => {
     cargarCarrito();
@@ -88,73 +86,17 @@ const CartScreen = ({ navigation }) => {
     return carrito.reduce((sum, item) => sum + (item.precio * item.cantidad), 0);
   };
 
-  const realizarPedido = async () => {
+  const irAPagar = () => {
     if (carrito.length === 0) {
-      Alert.alert('Carrito Vacío', 'Agrega productos antes de realizar el pedido');
+      Alert.alert('Carrito Vacío', 'Agrega productos antes de continuar');
       return;
     }
 
-    try {
-      setCreandoPedido(true);
-      
-      const userId = await AsyncStorage.getItem('userId');
-      const userName = await AsyncStorage.getItem('userName');
-      
-      if (!userId || !userName) {
-        Alert.alert('Error', 'No se pudo obtener información del usuario');
-        return;
-      }
-
-      const subtotal = calcularSubtotal();
-      const costoDelivery = 5;
-      const total = subtotal + costoDelivery;
-
-      const items = carrito.map(item => ({
-        id: item.id,
-        nombre: item.nombre,
-        precio: item.precio,
-        cantidad: item.cantidad,
-      }));
-
-      const pedidoData = {
-        clienteId: userId,
-        clienteNombre: userName,
-        clienteTelefono: '',
-        items: items,
-        subtotal: subtotal,
-        costoDelivery: costoDelivery,
-        total: total,
-        direccion: 'Dirección por definir',
-        metodoPago: metodoPago === 'yape' ? 'Yape' : 'Efectivo',
-        notas: '',
-        estado: 'pendiente',
-      };
-
-      const resultado = await crearPedido(pedidoData);
-      
-      if (resultado.success) {
-        await limpiarCarrito(userId);
-        setCarrito([]);
-        
-        Alert.alert(
-          '¡Pedido Realizado! 🎉',
-          `Tu pedido fue registrado correctamente.\n\nMétodo de pago: ${metodoPago === 'yape' ? 'Yape' : 'Efectivo'}\nTotal: S/ ${total.toFixed(2)}\n\nEstado: Pendiente (esperando confirmación del restaurante)`,
-          [
-            {
-              text: 'Ver Mis Pedidos',
-              onPress: () => navigation.navigate('HomeTabs', { screen: 'Orders' }),
-            },
-          ]
-        );
-      } else {
-        Alert.alert('Error', 'No se pudo crear el pedido. Intenta nuevamente.');
-      }
-    } catch (error) {
-      console.error('Error al realizar pedido:', error);
-      Alert.alert('Error', 'Ocurrió un error al procesar tu pedido');
-    } finally {
-      setCreandoPedido(false);
-    }
+    navigation.navigate('Checkout', {
+      carrito: carrito,
+      subtotal: calcularSubtotal(),
+      metodoPago: metodoPago
+    });
   };
 
   const renderItem = ({ item }) => (
@@ -218,7 +160,7 @@ const CartScreen = ({ navigation }) => {
         <Text style={styles.emptySubtitle}>Agrega productos del menú</Text>
         <TouchableOpacity
           style={styles.emptyButton}
-          onPress={() => navigation.navigate('Home')}
+          onPress={() => navigation.goBack()}
         >
           <Text style={styles.emptyButtonText}>Ver Menú</Text>
         </TouchableOpacity>
@@ -250,7 +192,6 @@ const CartScreen = ({ navigation }) => {
           scrollEnabled={false}
         />
 
-        {/* MÉTODO DE PAGO */}
         <View style={styles.paymentSection}>
           <Text style={styles.sectionTitle}>💳 Método de Pago</Text>
           
@@ -302,7 +243,6 @@ const CartScreen = ({ navigation }) => {
         </View>
       </ScrollView>
 
-      {/* FOOTER CON TOTALES */}
       <View style={styles.footer}>
         <View style={styles.totalRow}>
           <Text style={styles.totalLabel}>Subtotal:</Text>
@@ -326,15 +266,10 @@ const CartScreen = ({ navigation }) => {
         </Text>
         
         <TouchableOpacity
-          style={[styles.orderButton, creandoPedido && styles.orderButtonDisabled]}
-          onPress={realizarPedido}
-          disabled={creandoPedido}
+          style={styles.orderButton}
+          onPress={irAPagar}
         >
-          {creandoPedido ? (
-            <ActivityIndicator color="#FFF" />
-          ) : (
-            <Text style={styles.orderButtonText}>Realizar Pedido</Text>
-          )}
+          <Text style={styles.orderButtonText}>Ir a Pagar</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -606,9 +541,6 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     borderRadius: 12,
     alignItems: 'center',
-  },
-  orderButtonDisabled: {
-    opacity: 0.6,
   },
   orderButtonText: {
     color: '#FFF',

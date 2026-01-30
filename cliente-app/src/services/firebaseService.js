@@ -12,7 +12,6 @@ import {
   where 
 } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ============================================
 // USUARIOS
@@ -114,74 +113,122 @@ export const escucharMenuDelDia = (callback) => {
 };
 
 // ============================================
-// CARRITO
+// CARRITO (FIRESTORE)
 // ============================================
 
 export const obtenerCarrito = async (userId) => {
   try {
-    const carritoStr = await AsyncStorage.getItem(`carrito_${userId}`);
-    return carritoStr ? JSON.parse(carritoStr) : [];
+    console.log('📖 Obteniendo carrito para usuario:', userId);
+    const carritoRef = doc(db, 'carritos', userId);
+    const carritoDoc = await getDoc(carritoRef);
+    
+    if (carritoDoc.exists()) {
+      const data = carritoDoc.data();
+      console.log('✓ Carrito obtenido:', data.items?.length || 0, 'items');
+      return data.items || [];
+    }
+    console.log('⚠️ Carrito vacío');
+    return [];
   } catch (error) {
-    console.error('Error al obtener carrito:', error);
+    console.error('❌ Error al obtener carrito:', error);
     return [];
   }
 };
 
 export const agregarAlCarrito = async (userId, plato) => {
   try {
-    const carrito = await obtenerCarrito(userId);
+    console.log('➕ Agregando al carrito:', plato.nombre);
+    const carritoRef = doc(db, 'carritos', userId);
+    const carritoDoc = await getDoc(carritoRef);
     
-    const index = carrito.findIndex(item => item.id === plato.id);
+    let items = [];
     
-    if (index !== -1) {
-      carrito[index].cantidad += 1;
+    if (carritoDoc.exists()) {
+      items = carritoDoc.data().items || [];
+    }
+    
+    const itemExistente = items.find(item => item.id === plato.id);
+    
+    if (itemExistente) {
+      itemExistente.cantidad += 1;
+      console.log('✓ Cantidad actualizada:', itemExistente.cantidad);
     } else {
-      carrito.push({
+      items.push({
         id: plato.id,
         nombre: plato.nombre,
         precio: plato.precio,
-        imagen: plato.imagen || '',
+        imagen: plato.imagen || null,
         cantidad: 1
       });
+      console.log('✓ Producto agregado al carrito');
     }
     
-    await AsyncStorage.setItem(`carrito_${userId}`, JSON.stringify(carrito));
-    return { success: true, carrito };
+    await setDoc(carritoRef, {
+      userId: userId,
+      items: items,
+      updatedAt: Timestamp.now()
+    });
+    
+    console.log('✓ Carrito guardado en Firestore');
+    return { success: true, carrito: items };
   } catch (error) {
-    console.error('Error al agregar al carrito:', error);
+    console.error('❌ Error al agregar al carrito:', error);
     return { success: false, error: error.message };
   }
 };
 
-export const actualizarCantidadCarrito = async (userId, platoId, cantidad) => {
+export const actualizarCantidadCarrito = async (userId, platoId, nuevaCantidad) => {
   try {
-    const carrito = await obtenerCarrito(userId);
-    const index = carrito.findIndex(item => item.id === platoId);
+    console.log('🔄 Actualizando cantidad:', platoId, nuevaCantidad);
+    const carritoRef = doc(db, 'carritos', userId);
+    const carritoDoc = await getDoc(carritoRef);
     
-    if (index !== -1) {
-      if (cantidad <= 0) {
-        carrito.splice(index, 1);
-      } else {
-        carrito[index].cantidad = cantidad;
-      }
-      
-      await AsyncStorage.setItem(`carrito_${userId}`, JSON.stringify(carrito));
-      return { success: true, carrito };
+    if (!carritoDoc.exists()) {
+      console.error('❌ Carrito no encontrado');
+      return { success: false, error: 'Carrito no encontrado' };
     }
     
-    return { success: false, error: 'Item no encontrado' };
+    let items = carritoDoc.data().items || [];
+    
+    if (nuevaCantidad <= 0) {
+      items = items.filter(item => item.id !== platoId);
+      console.log('🗑️ Producto eliminado del carrito');
+    } else {
+      const item = items.find(i => i.id === platoId);
+      if (item) {
+        item.cantidad = nuevaCantidad;
+        console.log('✓ Cantidad actualizada:', nuevaCantidad);
+      }
+    }
+    
+    await setDoc(carritoRef, {
+      userId: userId,
+      items: items,
+      updatedAt: Timestamp.now()
+    });
+    
+    console.log('✓ Carrito actualizado en Firestore');
+    return { success: true, carrito: items };
   } catch (error) {
-    console.error('Error al actualizar carrito:', error);
+    console.error('❌ Error al actualizar cantidad:', error);
     return { success: false, error: error.message };
   }
 };
 
 export const limpiarCarrito = async (userId) => {
   try {
-    await AsyncStorage.removeItem(`carrito_${userId}`);
+    console.log('🧹 Limpiando carrito');
+    const carritoRef = doc(db, 'carritos', userId);
+    await setDoc(carritoRef, {
+      userId: userId,
+      items: [],
+      updatedAt: Timestamp.now()
+    });
+    
+    console.log('✓ Carrito limpiado');
     return { success: true };
   } catch (error) {
-    console.error('Error al limpiar carrito:', error);
+    console.error('❌ Error al limpiar carrito:', error);
     return { success: false, error: error.message };
   }
 };
@@ -192,29 +239,26 @@ export const limpiarCarrito = async (userId) => {
 
 export const crearPedido = async (pedidoData) => {
   try {
+    console.log('📦 Creando pedido...');
     const pedidoRef = await addDoc(collection(db, 'pedidos'), {
       ...pedidoData,
       estado: 'pendiente',
       createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
       historialEstados: [
         {
           estado: 'pendiente',
           timestamp: Timestamp.now(),
-          descripcion: 'Pedido creado, esperando confirmación del restaurante'
+          descripcion: 'Pedido creado, buscando repartidor disponible...'
         }
       ]
     });
     
-    return { 
-      success: true, 
-      pedidoId: pedidoRef.id 
-    };
+    console.log('✓ Pedido creado con ID:', pedidoRef.id);
+    return { success: true, pedidoId: pedidoRef.id };
   } catch (error) {
-    console.error('Error al crear pedido:', error);
-    return { 
-      success: false, 
-      error: error.message 
-    };
+    console.error('❌ Error al crear pedido:', error);
+    return { success: false, error: error.message };
   }
 };
 
@@ -233,7 +277,6 @@ export const obtenerPedidosUsuario = async (userId) => {
       }
     });
     
-    // Ordenar por fecha (más recientes primero)
     pedidos.sort((a, b) => {
       const timeA = a.createdAt?.toMillis() || 0;
       const timeB = b.createdAt?.toMillis() || 0;
@@ -247,7 +290,7 @@ export const obtenerPedidosUsuario = async (userId) => {
   }
 };
 
-export const escucharPedidosUsuario = (userId, callback) => {
+export const escucharMisPedidos = (clienteId, callback) => {
   try {
     const unsubscribe = onSnapshot(
       collection(db, 'pedidos'),
@@ -255,7 +298,7 @@ export const escucharPedidosUsuario = (userId, callback) => {
         const pedidos = [];
         snapshot.forEach((doc) => {
           const data = doc.data();
-          if (data.clienteId === userId) {
+          if (data.clienteId === clienteId) {
             pedidos.push({
               id: doc.id,
               ...data
@@ -263,7 +306,6 @@ export const escucharPedidosUsuario = (userId, callback) => {
           }
         });
         
-        // Ordenar por fecha (más recientes primero)
         pedidos.sort((a, b) => {
           const timeA = a.createdAt?.toMillis() || 0;
           const timeB = b.createdAt?.toMillis() || 0;
@@ -282,6 +324,41 @@ export const escucharPedidosUsuario = (userId, callback) => {
   } catch (error) {
     console.error('Error al configurar listener:', error);
     return () => {};
+  }
+};
+
+export const cancelarPedido = async (pedidoId, motivo = 'Cancelado por el cliente') => {
+  try {
+    const pedidoRef = doc(db, 'pedidos', pedidoId);
+    const pedidoDoc = await getDoc(pedidoRef);
+    
+    if (!pedidoDoc.exists()) {
+      return { success: false, error: 'Pedido no encontrado' };
+    }
+    
+    const pedidoData = pedidoDoc.data();
+    const historialActual = pedidoData.historialEstados || [];
+    
+    await updateDoc(pedidoRef, {
+      estado: 'cancelado',
+      canceladoAt: Timestamp.now(),
+      motivoCancelacion: motivo,
+      canceladoPor: 'cliente',
+      updatedAt: Timestamp.now(),
+      historialEstados: [
+        ...historialActual,
+        {
+          estado: 'cancelado',
+          timestamp: Timestamp.now(),
+          descripcion: motivo
+        }
+      ]
+    });
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Error al cancelar pedido:', error);
+    return { success: false, error: error.message };
   }
 };
 

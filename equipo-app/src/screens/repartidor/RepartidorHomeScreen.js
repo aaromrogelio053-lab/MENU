@@ -1,35 +1,37 @@
-// src/screens/repartidor/RepartidorHomeScreen.js
 import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
+  FlatList,
   TouchableOpacity,
-  RefreshControl,
   Alert,
   Linking,
-  Platform
+  Platform,
+  RefreshControl,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Card, Chip, IconButton, Badge } from 'react-native-paper';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   escucharPedidosDisponibles,
   escucharMisPedidosRepartidor,
   aceptarPedido,
-  rechazarPedido,
+  rechazarPedidoRepartidor,
   marcarEnCamino,
-  marcarEntregado
+  marcarEntregado,
+  actualizarDisponibilidadRepartidor,
+  obtenerDisponibilidadRepartidor,
 } from '../../services/firebaseService';
 
 export default function RepartidorHomeScreen({ navigation }) {
-  const [refreshing, setRefreshing] = useState(false);
-  const [tabActiva, setTabActiva] = useState('disponibles');
-  const [repartidorId, setRepartidorId] = useState(null);
-  const [repartidorNombre, setRepartidorNombre] = useState('');
+  const [tabActivo, setTabActivo] = useState('disponibles');
   const [pedidosDisponibles, setPedidosDisponibles] = useState([]);
   const [misPedidos, setMisPedidos] = useState([]);
+  const [repartidorId, setRepartidorId] = useState(null);
+  const [repartidorNombre, setRepartidorNombre] = useState('');
+  const [disponible, setDisponible] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     cargarDatosRepartidor();
@@ -39,10 +41,12 @@ export default function RepartidorHomeScreen({ navigation }) {
     if (!repartidorId) return;
 
     const unsubscribeDisponibles = escucharPedidosDisponibles((pedidos) => {
+      console.log('📦 Pedidos disponibles:', pedidos.length);
       setPedidosDisponibles(pedidos);
     });
 
     const unsubscribeMisPedidos = escucharMisPedidosRepartidor(repartidorId, (pedidos) => {
+      console.log('🚚 Mis pedidos:', pedidos.length);
       setMisPedidos(pedidos);
     });
 
@@ -55,47 +59,96 @@ export default function RepartidorHomeScreen({ navigation }) {
   const cargarDatosRepartidor = async () => {
     try {
       const id = await AsyncStorage.getItem('repartidorId');
-      const nombre = await AsyncStorage.getItem('repartidorNombre');
+      const nombre = await AsyncStorage.getItem('userName');
+      
+      console.log('👤 Cargando datos del repartidor:', id, nombre);
       
       if (id) {
         setRepartidorId(id);
         setRepartidorNombre(nombre || 'Repartidor');
+        
+        console.log('📖 Obteniendo disponibilidad...');
+        const result = await obtenerDisponibilidadRepartidor(id);
+        if (result.success) {
+          console.log('✓ Disponibilidad cargada:', result.disponible);
+          setDisponible(result.disponible);
+        } else {
+          console.error('❌ Error al obtener disponibilidad:', result.error);
+        }
+      } else {
+        console.error('❌ No se encontró repartidorId en AsyncStorage');
       }
     } catch (error) {
-      console.error('Error cargar datos repartidor:', error);
+      console.error('❌ Error al cargar datos del repartidor:', error);
     }
   };
 
-  const onRefresh = async () => {
-    setRefreshing(true);
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    setRefreshing(false);
-  };
-
-  const handleAceptarPedido = async (pedidoId) => {
+  const toggleDisponibilidad = async () => {
     if (!repartidorId) {
       Alert.alert('Error', 'No se pudo identificar al repartidor');
       return;
     }
 
+    try {
+      console.log('🔄 Cambiando disponibilidad...');
+      const nuevoEstado = !disponible;
+      
+      const result = await actualizarDisponibilidadRepartidor(repartidorId, nuevoEstado);
+      
+      if (result.success) {
+        setDisponible(nuevoEstado);
+        console.log('✓ Disponibilidad cambiada a:', nuevoEstado);
+        Alert.alert(
+          nuevoEstado ? '✓ Ahora estás disponible' : '✓ Ahora estás NO disponible',
+          nuevoEstado 
+            ? 'Podrás recibir nuevos pedidos automáticamente' 
+            : 'No recibirás nuevos pedidos hasta que te marques como disponible'
+        );
+      } else {
+        console.error('❌ Error en resultado:', result.error);
+        Alert.alert('Error', 'No se pudo actualizar tu disponibilidad: ' + result.error);
+      }
+    } catch (error) {
+      console.error('❌ Error al cambiar disponibilidad:', error);
+      Alert.alert('Error', 'Ocurrió un error al cambiar tu disponibilidad: ' + error.message);
+    }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await cargarDatosRepartidor();
+    setTimeout(() => setRefreshing(false), 1000);
+  };
+
+  const handleAceptarPedido = async (pedido) => {
+    if (!disponible) {
+      Alert.alert(
+        'No disponible',
+        'Debes marcarte como DISPONIBLE antes de aceptar pedidos',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Marcarme disponible',
+            onPress: toggleDisponibilidad
+          }
+        ]
+      );
+      return;
+    }
+
     Alert.alert(
       'Aceptar Pedido',
-      '¿Quieres aceptar este pedido?',
+      `¿Aceptar pedido de ${pedido.clienteNombre}?\n\nTotal: S/ ${pedido.total?.toFixed(2)}`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Sí, Aceptar',
+          text: 'Aceptar',
           onPress: async () => {
-            try {
-              const result = await aceptarPedido(pedidoId, repartidorId, repartidorNombre);
-              if (result.success) {
-                Alert.alert('¡Éxito!', 'Pedido aceptado correctamente');
-              } else {
-                Alert.alert('Error', result.error || 'No se pudo aceptar el pedido');
-              }
-            } catch (error) {
-              console.error('Error al aceptar pedido:', error);
-              Alert.alert('Error', 'Ocurrió un error al aceptar el pedido');
+            const result = await aceptarPedido(pedido.id, repartidorId, repartidorNombre);
+            if (result.success) {
+              Alert.alert('✓ Pedido Aceptado', 'El pedido fue asignado a ti');
+            } else {
+              Alert.alert('Error', result.error || 'No se pudo aceptar el pedido');
             }
           }
         }
@@ -103,35 +156,142 @@ export default function RepartidorHomeScreen({ navigation }) {
     );
   };
 
-  const handleRechazarPedido = (pedidoId) => {
+  const handleRechazarPedido = async (pedido) => {
     Alert.alert(
       'Rechazar Pedido',
-      '¿Seguro que quieres rechazar este pedido?',
+      `¿Seguro que quieres rechazar este pedido de ${pedido.clienteNombre}?`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
           text: 'Rechazar',
           style: 'destructive',
-          onPress: () => {
-            setPedidosDisponibles(prev => prev.filter(p => p.id !== pedidoId));
+          onPress: async () => {
+            const result = await rechazarPedidoRepartidor(pedido.id, repartidorId);
+            if (result.success) {
+              Alert.alert('✓ Pedido Rechazado', 'El pedido fue removido de tu lista');
+            } else {
+              Alert.alert('Error', 'No se pudo rechazar el pedido');
+            }
           }
         }
       ]
     );
   };
 
-  const handleMarcarEnCamino = async (pedidoId) => {
+  const handleLlamar = (telefono) => {
+    if (!telefono) {
+      Alert.alert('Error', 'No hay número de teléfono disponible');
+      return;
+    }
+    
+    const numeroLimpio = telefono.replace(/\D/g, '');
+    const url = `tel:${numeroLimpio}`;
+    
+    Linking.canOpenURL(url)
+      .then((supported) => {
+        if (supported) {
+          return Linking.openURL(url);
+        } else {
+          Alert.alert('Error', 'No se puede realizar la llamada');
+        }
+      })
+      .catch((err) => console.error('Error al intentar llamar:', err));
+  };
+
+  const handleWhatsApp = async (telefono) => {
+    if (!telefono) {
+      Alert.alert('Error', 'No hay número de teléfono disponible');
+      return;
+    }
+    
+    let numeroLimpio = telefono.replace(/\D/g, '');
+    
+    if (numeroLimpio.startsWith('51')) {
+      numeroLimpio = numeroLimpio;
+    } else if (numeroLimpio.length === 9) {
+      numeroLimpio = '51' + numeroLimpio;
+    }
+    
+    const mensaje = 'Hola! Soy tu repartidor. Estoy en camino con tu pedido 🛵';
+    const url = `whatsapp://send?phone=${numeroLimpio}&text=${encodeURIComponent(mensaje)}`;
+    
     try {
-      const result = await marcarEnCamino(pedidoId);
-      if (result.success) {
-        Alert.alert('¡Listo!', 'Pedido marcado como "En Camino"');
+      const supported = await Linking.canOpenURL(url);
+      
+      if (supported) {
+        await Linking.openURL(url);
       } else {
-        Alert.alert('Error', result.error || 'No se pudo actualizar el estado');
+        Alert.alert(
+          'WhatsApp no disponible',
+          'WhatsApp no está instalado en este dispositivo',
+          [
+            {
+              text: 'Instalar WhatsApp',
+              onPress: () => {
+                const storeUrl = Platform.OS === 'ios'
+                  ? 'https://apps.apple.com/app/whatsapp-messenger/id310633997'
+                  : 'https://play.google.com/store/apps/details?id=com.whatsapp';
+                Linking.openURL(storeUrl);
+              }
+            },
+            { text: 'Cancelar', style: 'cancel' }
+          ]
+        );
       }
     } catch (error) {
-      console.error('Error al marcar en camino:', error);
-      Alert.alert('Error', 'Ocurrió un error');
+      console.error('Error al abrir WhatsApp:', error);
+      Alert.alert('Error', 'No se pudo abrir WhatsApp');
     }
+  };
+
+  const handleVerMapa = (direccion) => {
+    if (!direccion) {
+      Alert.alert('Error', 'No hay dirección disponible');
+      return;
+    }
+    
+    const direccionCompleta = direccion.includes('Arequipa') 
+      ? direccion 
+      : `${direccion}, Arequipa, Perú`;
+    
+    const encodedAddress = encodeURIComponent(direccionCompleta);
+    
+    const url = Platform.select({
+      ios: `maps:0,0?q=${encodedAddress}`,
+      android: `google.navigation:q=${encodedAddress}`
+    });
+    
+    Linking.canOpenURL(url)
+      .then((supported) => {
+        if (supported) {
+          return Linking.openURL(url);
+        } else {
+          const webUrl = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
+          return Linking.openURL(webUrl);
+        }
+      })
+      .catch((err) => console.error('Error al abrir mapa:', err));
+  };
+
+  const handleIniciarEntrega = async (pedidoId) => {
+    Alert.alert(
+      'Iniciar Entrega',
+      '¿El pedido está listo y vas en camino?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Sí, en camino',
+          onPress: async () => {
+            const result = await marcarEnCamino(pedidoId);
+            if (result.success) {
+              Alert.alert('✓', 'Pedido marcado como "En camino"');
+            } else {
+              Alert.alert('Error', 'No se pudo actualizar el estado');
+            }
+          }
+        }
+      ]
+    );
   };
 
   const handleMarcarEntregado = async (pedidoId) => {
@@ -139,20 +299,15 @@ export default function RepartidorHomeScreen({ navigation }) {
       'Confirmar Entrega',
       '¿El pedido fue entregado al cliente?',
       [
-        { text: 'No', style: 'cancel' },
+        { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Sí, Entregado',
+          text: 'Sí, entregado',
           onPress: async () => {
-            try {
-              const result = await marcarEntregado(pedidoId);
-              if (result.success) {
-                Alert.alert('¡Excelente!', '¡Pedido entregado con éxito! 🎉');
-              } else {
-                Alert.alert('Error', result.error || 'No se pudo actualizar el estado');
-              }
-            } catch (error) {
-              console.error('Error al marcar entregado:', error);
-              Alert.alert('Error', 'Ocurrió un error');
+            const result = await marcarEntregado(pedidoId);
+            if (result.success) {
+              Alert.alert('✓ Entregado', 'Pedido completado exitosamente');
+            } else {
+              Alert.alert('Error', 'No se pudo marcar como entregado');
             }
           }
         }
@@ -160,426 +315,246 @@ export default function RepartidorHomeScreen({ navigation }) {
     );
   };
 
-  // ✅ NUEVA FUNCIÓN: Llamar al cliente
-  const handleLlamar = (telefono) => {
-    if (!telefono) {
-      Alert.alert('Error', 'No hay número de teléfono disponible');
-      return;
-    }
+  const renderPedidoDisponible = ({ item }) => (
+    <View style={styles.pedidoCard}>
+      <View style={styles.pedidoHeader}>
+        <View>
+          <Text style={styles.pedidoCliente}>👤 {item.clienteNombre || 'Cliente'}</Text>
+          <Text style={styles.pedidoFecha}>
+            {item.createdAt?.toDate().toLocaleString('es-PE', {
+              day: '2-digit',
+              month: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit'
+            })}
+          </Text>
+        </View>
+        <Text style={styles.pedidoTotal}>S/ {item.total?.toFixed(2)}</Text>
+      </View>
 
-    // Limpiar el teléfono (quitar espacios, guiones, etc.)
-    const telefonoLimpio = telefono.replace(/[^0-9+]/g, '');
-    const url = `tel:${telefonoLimpio}`;
+      <View style={styles.pedidoInfo}>
+        <Text style={styles.infoLabel}>📍 Dirección:</Text>
+        <Text style={styles.infoText}>{item.direccion || 'No especificada'}</Text>
+        
+        {item.referencia ? (
+          <>
+            <Text style={styles.infoLabel}>📌 Referencia:</Text>
+            <Text style={styles.infoText}>{item.referencia}</Text>
+          </>
+        ) : null}
 
-    Linking.canOpenURL(url)
-      .then((supported) => {
-        if (supported) {
-          return Linking.openURL(url);
-        } else {
-          Alert.alert('Error', 'No se puede realizar llamadas en este dispositivo');
-        }
-      })
-      .catch((err) => {
-        console.error('Error al abrir teléfono:', err);
-        Alert.alert('Error', 'No se pudo abrir la aplicación de teléfono');
-      });
-  };
+        <Text style={styles.infoLabel}>📞 Teléfono:</Text>
+        <Text style={styles.infoText}>{item.clienteTelefono || 'No disponible'}</Text>
 
-  // ✅ NUEVA FUNCIÓN: Abrir WhatsApp
-  const handleWhatsApp = (telefono) => {
-    if (!telefono) {
-      Alert.alert('Error', 'No hay número de teléfono disponible');
-      return;
-    }
+        <Text style={styles.infoLabel}>🍽️ Productos:</Text>
+        {item.items?.map((producto, index) => (
+          <Text key={index} style={styles.productoItem}>
+            • {producto.cantidad}x {producto.nombre}
+          </Text>
+        ))}
 
-    // Limpiar el teléfono y asegurarse que tenga el código de país
-    let telefonoLimpio = telefono.replace(/[^0-9]/g, '');
-    
-    // Si el teléfono empieza con 51 (Perú), lo dejamos
-    // Si empieza con 9, le agregamos 51
-    if (telefonoLimpio.startsWith('9') && telefonoLimpio.length === 9) {
-      telefonoLimpio = '51' + telefonoLimpio;
-    }
-    
-    const mensaje = encodeURIComponent('Hola, soy tu repartidor de Menú Arequipa. Estoy en camino con tu pedido 🚴');
-    const url = `whatsapp://send?phone=${telefonoLimpio}&text=${mensaje}`;
+        <Text style={styles.infoLabel}>💳 Pago:</Text>
+        <Text style={styles.infoText}>{item.metodoPago || 'Efectivo'}</Text>
+      </View>
 
-    Linking.canOpenURL(url)
-      .then((supported) => {
-        if (supported) {
-          return Linking.openURL(url);
-        } else {
-          Alert.alert(
-            'WhatsApp no disponible',
-            '¿Deseas instalar WhatsApp?',
-            [
-              { text: 'No', style: 'cancel' },
-              {
-                text: 'Sí',
-                onPress: () => {
-                  const playStoreUrl = 'market://details?id=com.whatsapp';
-                  Linking.openURL(playStoreUrl);
-                }
-              }
-            ]
-          );
-        }
-      })
-      .catch((err) => {
-        console.error('Error al abrir WhatsApp:', err);
-        Alert.alert('Error', 'No se pudo abrir WhatsApp');
-      });
-  };
+      <View style={styles.pedidoActions}>
+        <TouchableOpacity
+          style={[styles.actionButton, styles.acceptButton]}
+          onPress={() => handleAceptarPedido(item)}
+        >
+          <Text style={styles.actionButtonText}>✓ Aceptar</Text>
+        </TouchableOpacity>
 
-  // ✅ NUEVA FUNCIÓN: Abrir Google Maps
-  const handleVerMapa = (pedido) => {
-    const direccionTexto = typeof pedido.direccion === 'object' 
-      ? pedido.direccion.direccion 
-      : pedido.direccion;
+        <TouchableOpacity
+          style={[styles.actionButton, styles.rejectButton]}
+          onPress={() => handleRechazarPedido(item)}
+        >
+          <Text style={styles.actionButtonText}>✕ Rechazar</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
 
-    if (!direccionTexto) {
-      Alert.alert('Error', 'No hay dirección disponible');
-      return;
-    }
+  const renderMiPedido = ({ item }) => {
+    const estadoConfig = {
+      confirmado: { color: '#2196F3', texto: 'Confirmado', icono: '✓' },
+      en_preparacion: { color: '#FF9800', texto: 'En Preparación', icono: '👨‍🍳' },
+      listo: { color: '#4CAF50', texto: 'Listo', icono: '✓' },
+      en_camino: { color: '#9C27B0', texto: 'En Camino', icono: '🚚' },
+    };
 
-    // Formatear dirección para Google Maps
-    const direccionFormateada = `${direccionTexto}, Arequipa, Perú`;
-    const direccionEncoded = encodeURIComponent(direccionFormateada);
-    
-    // URLs para diferentes plataformas
-    const scheme = Platform.select({
-      ios: 'maps:', // Apple Maps en iOS
-      android: 'google.navigation:' // Google Maps en Android
-    });
-    
-    const url = Platform.select({
-      ios: `${scheme}q=${direccionEncoded}`,
-      android: `${scheme}q=${direccionEncoded}&mode=d` // mode=d para modo conducción
-    });
-
-    const webUrl = `https://www.google.com/maps/search/?api=1&query=${direccionEncoded}`;
-
-    Linking.canOpenURL(url)
-      .then((supported) => {
-        if (supported) {
-          return Linking.openURL(url);
-        } else {
-          // Si no hay app de mapas, abrir en navegador
-          return Linking.openURL(webUrl);
-        }
-      })
-      .catch((err) => {
-        console.error('Error al abrir mapa:', err);
-        Alert.alert('Error', 'No se pudo abrir el mapa');
-      });
-  };
-
-  const calcularTotales = () => {
-    const disponiblesCount = pedidosDisponibles.length;
-    const enCaminoCount = misPedidos.filter(p => p.estado === 'en_camino').length;
-    const listoCount = misPedidos.filter(p => p.estado === 'confirmado' || p.estado === 'listo').length;
-    const totalHoy = misPedidos.reduce((sum, p) => {
-      const subtotal = p.subtotal || 0;
-      const delivery = p.costoDelivery || 0;
-      return sum + subtotal + delivery;
-    }, 0);
-
-    return { disponiblesCount, enCaminoCount, listoCount, totalHoy };
-  };
-
-  const totales = calcularTotales();
-
-  const renderPedidoDisponible = (pedido) => {
-    const direccionTexto = typeof pedido.direccion === 'object' 
-      ? pedido.direccion.direccion 
-      : pedido.direccion;
-    const referencia = typeof pedido.direccion === 'object' 
-      ? pedido.direccion.referencia 
-      : '';
-    const total = (pedido.subtotal || 0) + (pedido.costoDelivery || 0);
+    const config = estadoConfig[item.estado] || { color: '#666', texto: item.estado, icono: '•' };
 
     return (
-      <Card key={pedido.id} style={styles.card}>
-        <Card.Content>
-          {/* Header */}
-          <View style={styles.cardHeader}>
-            <View>
-              <Text style={styles.pedidoId}>#{pedido.id.substring(0, 8)}</Text>
-              <Text style={styles.pedidoHora}>
-                🕐 {pedido.createdAt?.toDate ? 
-                  new Date(pedido.createdAt.toDate()).toLocaleTimeString('es-PE', { 
-                    hour: '2-digit', 
-                    minute: '2-digit' 
-                  }) : 'Ahora'}
-              </Text>
-            </View>
-            <Chip style={styles.nuevoChip} textStyle={styles.nuevoText}>
-              🆕 Nuevo
-            </Chip>
-          </View>
-
-          {/* Cliente */}
-          <View style={styles.clienteInfo}>
-            <Text style={styles.clienteNombre}>👤 {pedido.clienteNombre || 'Cliente'}</Text>
-            <Text style={styles.clienteTelefono}>📞 {pedido.clienteTelefono || 'Sin teléfono'}</Text>
-          </View>
-
-          {/* Dirección */}
-          <View style={styles.direccionContainer}>
-            <Text style={styles.direccionIcon}>📍</Text>
-            <View style={styles.direccionTexto}>
-              <Text style={styles.direccion}>{direccionTexto || 'Sin dirección'}</Text>
-              {referencia && (
-                <Text style={styles.referencia}>Ref: {referencia}</Text>
-              )}
+      <View style={styles.pedidoCard}>
+        <View style={styles.pedidoHeader}>
+          <View>
+            <Text style={styles.pedidoCliente}>👤 {item.clienteNombre || 'Cliente'}</Text>
+            <View style={[styles.estadoBadge, { backgroundColor: config.color }]}>
+              <Text style={styles.estadoTexto}>{config.icono} {config.texto}</Text>
             </View>
           </View>
+          <Text style={styles.pedidoTotal}>S/ {item.total?.toFixed(2)}</Text>
+        </View>
 
-          {/* Items */}
-          <View style={styles.itemsContainer}>
-            <Text style={styles.itemsTitle}>Pedido:</Text>
-            {pedido.items && pedido.items.map((item, index) => (
-              <Text key={index} style={styles.item}>
-                • {item.cantidad}x {item.nombre}
-              </Text>
-            ))}
-          </View>
+        <View style={styles.pedidoInfo}>
+          <Text style={styles.infoLabel}>📍 Dirección:</Text>
+          <Text style={styles.infoText}>{item.direccion || 'No especificada'}</Text>
+          
+          {item.referencia ? (
+            <>
+              <Text style={styles.infoLabel}>📌 Referencia:</Text>
+              <Text style={styles.infoText}>{item.referencia}</Text>
+            </>
+          ) : null}
 
-          {/* Total */}
-          <View style={styles.paymentContainer}>
-            <Text style={styles.metodoPago}>💳 {pedido.metodoPago || 'Efectivo'}</Text>
-            <Text style={styles.total}>S/ {total.toFixed(2)}</Text>
-          </View>
+          <Text style={styles.infoLabel}>📞 Teléfono:</Text>
+          <Text style={styles.infoText}>{item.clienteTelefono || 'No disponible'}</Text>
 
-          {/* Botones de acción */}
-          <View style={styles.actions}>
-            <TouchableOpacity
-              style={styles.rechazarButton}
-              onPress={() => handleRechazarPedido(pedido.id)}
-            >
-              <Text style={styles.rechazarButtonText}>✗ Rechazar</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.aceptarButton}
-              onPress={() => handleAceptarPedido(pedido.id)}
-            >
-              <Text style={styles.aceptarButtonText}>✓ Aceptar Pedido</Text>
-            </TouchableOpacity>
-          </View>
-        </Card.Content>
-      </Card>
-    );
-  };
+          <Text style={styles.infoLabel}>🍽️ Productos:</Text>
+          {item.items?.map((producto, index) => (
+            <Text key={index} style={styles.productoItem}>
+              • {producto.cantidad}x {producto.nombre}
+            </Text>
+          ))}
 
-  const renderMiPedido = (pedido) => {
-    const direccionTexto = typeof pedido.direccion === 'object' 
-      ? pedido.direccion.direccion 
-      : pedido.direccion;
-    const referencia = typeof pedido.direccion === 'object' 
-      ? pedido.direccion.referencia 
-      : '';
-    const total = (pedido.subtotal || 0) + (pedido.costoDelivery || 0);
+          <Text style={styles.infoLabel}>💳 Pago:</Text>
+          <Text style={styles.infoText}>{item.metodoPago || 'Efectivo'}</Text>
 
-    const esListo = pedido.estado === 'confirmado' || pedido.estado === 'listo';
-    const esEnCamino = pedido.estado === 'en_camino';
+          {item.notas ? (
+            <>
+              <Text style={styles.infoLabel}>📝 Notas:</Text>
+              <Text style={styles.infoText}>{item.notas}</Text>
+            </>
+          ) : null}
+        </View>
 
-    return (
-      <Card key={pedido.id} style={styles.card}>
-        <Card.Content>
-          {/* Header */}
-          <View style={styles.cardHeader}>
-            <View>
-              <Text style={styles.pedidoId}>#{pedido.id.substring(0, 8)}</Text>
-            </View>
-            
-            <Chip
-              style={[
-                styles.estadoChip,
-                esListo && styles.listoChip,
-                esEnCamino && styles.enCaminoChip
-              ]}
-              textStyle={styles.estadoText}
-            >
-              {esListo && '📦 Listo'}
-              {esEnCamino && '🚴 En Camino'}
-            </Chip>
-          </View>
+        <View style={styles.pedidoActions}>
+          <TouchableOpacity
+            style={[styles.actionButton, styles.callButton]}
+            onPress={() => handleLlamar(item.clienteTelefono)}
+          >
+            <Text style={styles.actionButtonText}>📞 Llamar</Text>
+          </TouchableOpacity>
 
-          {/* Cliente */}
-          <View style={styles.clienteInfo}>
-            <Text style={styles.clienteNombre}>👤 Cliente</Text>
-            <Text style={styles.clienteTelefono}>📞 {pedido.clienteTelefono || 'Sin teléfono'}</Text>
-          </View>
+          <TouchableOpacity
+            style={[styles.actionButton, styles.whatsappButton]}
+            onPress={() => handleWhatsApp(item.clienteTelefono)}
+          >
+            <Text style={styles.actionButtonText}>💬 WhatsApp</Text>
+          </TouchableOpacity>
 
-          {/* ✅ BOTONES DE CONTACTO ARREGLADOS */}
-          <View style={styles.contactoContainer}>
-            <TouchableOpacity
-              style={styles.contactoButton}
-              onPress={() => handleLlamar(pedido.clienteTelefono)}
-            >
-              <Text style={styles.contactoButtonText}>📞 Llamar</Text>
-            </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.actionButton, styles.mapButton]}
+            onPress={() => handleVerMapa(item.direccion)}
+          >
+            <Text style={styles.actionButtonText}>🗺️ Mapa</Text>
+          </TouchableOpacity>
+        </View>
 
-            <TouchableOpacity
-              style={styles.contactoButtonWhatsApp}
-              onPress={() => handleWhatsApp(pedido.clienteTelefono)}
-            >
-              <Text style={styles.contactoButtonText}>💬 WhatsApp</Text>
-            </TouchableOpacity>
-          </View>
+        {/* ✅ BOTÓN INICIAR ENTREGA (cuando estado = listo o confirmado) */}
+        {(item.estado === 'listo' || item.estado === 'confirmado') && (
+          <TouchableOpacity
+            style={[styles.actionButton, styles.deliveryButton]}
+            onPress={() => handleIniciarEntrega(item.id)}
+          >
+            <Text style={styles.actionButtonText}>🚚 Iniciar Entrega</Text>
+          </TouchableOpacity>
+        )}
 
-          {/* Dirección */}
-          <View style={styles.direccionContainer}>
-            <Text style={styles.direccionIcon}>📍</Text>
-            <View style={styles.direccionTexto}>
-              <Text style={styles.direccion}>{direccionTexto || 'Sin dirección'}</Text>
-              {referencia && (
-                <Text style={styles.referencia}>Ref: {referencia}</Text>
-              )}
-            </View>
-          </View>
-
-          {/* Items */}
-          <View style={styles.itemsContainer}>
-            <Text style={styles.itemsTitle}>Pedido:</Text>
-            {pedido.items && pedido.items.map((item, index) => (
-              <Text key={index} style={styles.item}>
-                • {item.cantidad}x {item.nombre}
-              </Text>
-            ))}
-          </View>
-
-          {/* Total */}
-          <View style={styles.paymentContainer}>
-            <Text style={styles.metodoPago}>💳 {pedido.metodoPago || 'efectivo'}</Text>
-            <Text style={styles.total}>S/ {total.toFixed(2)}</Text>
-          </View>
-
-          {/* Botones de acción según estado */}
-          <View style={styles.actions}>
-            <TouchableOpacity
-              style={styles.mapButton}
-              onPress={() => handleVerMapa(pedido)}
-            >
-              <Text style={styles.mapButtonText}>🗺️ Ver Mapa</Text>
-            </TouchableOpacity>
-
-            {esListo && (
-              <TouchableOpacity
-                style={styles.startButton}
-                onPress={() => handleMarcarEnCamino(pedido.id)}
-              >
-                <Text style={styles.startButtonText}>Iniciar Entrega</Text>
-              </TouchableOpacity>
-            )}
-
-            {esEnCamino && (
-              <TouchableOpacity
-                style={styles.completeButton}
-                onPress={() => handleMarcarEntregado(pedido.id)}
-              >
-                <Text style={styles.completeButtonText}>✓ Entregado</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </Card.Content>
-      </Card>
+        {/* ✅ BOTÓN MARCAR ENTREGADO (cuando estado = en_camino) */}
+        {item.estado === 'en_camino' && (
+          <TouchableOpacity
+            style={[styles.actionButton, styles.completeButton]}
+            onPress={() => handleMarcarEntregado(item.id)}
+          >
+            <Text style={styles.actionButtonText}>✓ Marcar Entregado</Text>
+          </TouchableOpacity>
+        )}
+      </View>
     );
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <View>
-          <Text style={styles.greeting}>¡Hola {repartidorNombre}! 🚴</Text>
-          <Text style={styles.title}>Tus Entregas</Text>
+          <Text style={styles.headerTitle}>Repartidor</Text>
+          <Text style={styles.headerSubtitle}>{repartidorNombre}</Text>
         </View>
-        
-        <TouchableOpacity onPress={() => navigation.navigate('SelectRole')}>
-          <IconButton icon="logout" iconColor="#FF6B35" size={24} />
+        <TouchableOpacity
+          style={[
+            styles.disponibilidadButton,
+            disponible ? styles.disponibleButton : styles.noDisponibleButton
+          ]}
+          onPress={toggleDisponibilidad}
+        >
+          <Text style={styles.disponibilidadText}>
+            {disponible ? '✓ Disponible' : '✕ No Disponible'}
+          </Text>
         </TouchableOpacity>
       </View>
 
-      {/* Estadísticas */}
       <View style={styles.statsContainer}>
         <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{totales.disponiblesCount}</Text>
+          <Text style={styles.statNumber}>{pedidosDisponibles.length}</Text>
           <Text style={styles.statLabel}>Disponibles</Text>
         </View>
         <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{totales.enCaminoCount}</Text>
-          <Text style={styles.statLabel}>En Camino</Text>
+          <Text style={styles.statNumber}>{misPedidos.length}</Text>
+          <Text style={styles.statLabel}>En Proceso</Text>
         </View>
         <View style={styles.statCard}>
-          <Text style={styles.statNumber}>S/ {totales.totalHoy.toFixed(0)}</Text>
-          <Text style={styles.statLabel}>Hoy</Text>
+          <Text style={styles.statNumber}>
+            {misPedidos.filter(p => p.estado === 'en_camino').length}
+          </Text>
+          <Text style={styles.statLabel}>En Camino</Text>
         </View>
       </View>
 
-      {/* Tabs */}
-      <View style={styles.tabsContainer}>
+      <View style={styles.tabs}>
         <TouchableOpacity
-          style={[styles.tab, tabActiva === 'disponibles' && styles.tabActiva]}
-          onPress={() => setTabActiva('disponibles')}
+          style={[styles.tab, tabActivo === 'disponibles' && styles.tabActivo]}
+          onPress={() => setTabActivo('disponibles')}
         >
-          <Text style={[styles.tabText, tabActiva === 'disponibles' && styles.tabTextActiva]}>
-            📋 Disponibles
+          <Text style={[styles.tabText, tabActivo === 'disponibles' && styles.tabTextoActivo]}>
+            📦 Disponibles ({pedidosDisponibles.length})
           </Text>
-          {totales.disponiblesCount > 0 && (
-            <Badge style={styles.badge}>{totales.disponiblesCount}</Badge>
-          )}
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.tab, tabActiva === 'mis_pedidos' && styles.tabActiva]}
-          onPress={() => setTabActiva('mis_pedidos')}
+          style={[styles.tab, tabActivo === 'misPedidos' && styles.tabActivo]}
+          onPress={() => setTabActivo('misPedidos')}
         >
-          <Text style={[styles.tabText, tabActiva === 'mis_pedidos' && styles.tabTextActiva]}>
-            📦 Mis Pedidos
+          <Text style={[styles.tabText, tabActivo === 'misPedidos' && styles.tabTextoActivo]}>
+            🚚 Mis Pedidos ({misPedidos.length})
           </Text>
-          {misPedidos.length > 0 && (
-            <Badge style={styles.badge}>{misPedidos.length}</Badge>
-          )}
         </TouchableOpacity>
       </View>
 
-      {/* Contenido */}
-      <ScrollView
-        style={styles.scrollView}
+      <FlatList
+        data={tabActivo === 'disponibles' ? pedidosDisponibles : misPedidos}
+        renderItem={tabActivo === 'disponibles' ? renderPedidoDisponible : renderMiPedido}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listContent}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#FF6B35']} />
         }
-      >
-        {tabActiva === 'disponibles' ? (
-          pedidosDisponibles.length > 0 ? (
-            pedidosDisponibles.map(renderPedidoDisponible)
-          ) : (
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyIcon}>📭</Text>
-              <Text style={styles.emptyTitle}>No hay pedidos disponibles</Text>
-              <Text style={styles.emptyText}>
-                Los nuevos pedidos aparecerán aquí
-              </Text>
-            </View>
-          )
-        ) : (
-          misPedidos.length > 0 ? (
-            misPedidos.map(renderMiPedido)
-          ) : (
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyIcon}>📦</Text>
-              <Text style={styles.emptyTitle}>No tienes pedidos asignados</Text>
-              <Text style={styles.emptyText}>
-                Acepta pedidos disponibles para empezar
-              </Text>
-            </View>
-          )
-        )}
-
-        <View style={styles.bottomPadding} />
-      </ScrollView>
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyIcon}>
+              {tabActivo === 'disponibles' ? '📦' : '🚚'}
+            </Text>
+            <Text style={styles.emptyText}>
+              {tabActivo === 'disponibles'
+                ? disponible 
+                  ? 'No hay pedidos disponibles'
+                  : 'Activa tu disponibilidad para ver pedidos'
+                : 'No tienes pedidos asignados'}
+            </Text>
+          </View>
+        }
+      />
     </SafeAreaView>
   );
 }
@@ -587,310 +562,217 @@ export default function RepartidorHomeScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#F5F5F5',
   },
   header: {
+    backgroundColor: '#FFF',
+    padding: 20,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 16,
-    backgroundColor: '#fff',
+    alignItems: 'center',
+    elevation: 2,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEE',
   },
-  greeting: {
-    fontSize: 16,
-    color: '#666',
-  },
-  title: {
-    fontSize: 28,
+  headerTitle: {
+    fontSize: 24,
     fontWeight: 'bold',
     color: '#333',
+  },
+  headerSubtitle: {
+    fontSize: 14,
+    color: '#666',
     marginTop: 4,
+  },
+  disponibilidadButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    elevation: 2,
+  },
+  disponibleButton: {
+    backgroundColor: '#4CAF50',
+  },
+  noDisponibleButton: {
+    backgroundColor: '#F44336',
+  },
+  disponibilidadText: {
+    color: '#FFF',
+    fontWeight: 'bold',
+    fontSize: 14,
   },
   statsContainer: {
     flexDirection: 'row',
-    padding: 16,
-    gap: 12,
+    backgroundColor: '#FFF',
+    paddingVertical: 16,
+    paddingHorizontal: 8,
+    marginTop: 8,
   },
   statCard: {
     flex: 1,
-    backgroundColor: '#fff',
-    padding: 16,
-    borderRadius: 12,
     alignItems: 'center',
-    elevation: 2,
+    paddingVertical: 12,
   },
   statNumber: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: 'bold',
-    color: '#4CAF50',
+    color: '#FF6B35',
   },
   statLabel: {
     fontSize: 12,
     color: '#666',
     marginTop: 4,
   },
-  tabsContainer: {
+  tabs: {
     flexDirection: 'row',
-    backgroundColor: '#fff',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    gap: 8,
+    backgroundColor: '#FFF',
+    marginTop: 8,
+    borderBottomWidth: 2,
+    borderBottomColor: '#F0F0F0',
   },
   tab: {
     flex: 1,
-    flexDirection: 'row',
+    paddingVertical: 16,
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
-    gap: 8,
   },
-  tabActiva: {
-    borderBottomColor: '#4CAF50',
+  tabActivo: {
+    borderBottomWidth: 3,
+    borderBottomColor: '#FF6B35',
   },
   tabText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#999',
+    fontSize: 14,
+    color: '#666',
+    fontWeight: '500',
   },
-  tabTextActiva: {
-    color: '#4CAF50',
+  tabTextoActivo: {
+    color: '#FF6B35',
+    fontWeight: 'bold',
   },
-  badge: {
-    backgroundColor: '#4CAF50',
+  listContent: {
+    padding: 12,
   },
-  scrollView: {
-    flex: 1,
-    paddingTop: 16,
-  },
-  card: {
-    marginHorizontal: 16,
-    marginBottom: 16,
-    elevation: 3,
+  pedidoCard: {
+    backgroundColor: '#FFF',
     borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
   },
-  cardHeader: {
+  pedidoHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 12,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
   },
-  pedidoId: {
+  pedidoCliente: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#333',
   },
-  pedidoHora: {
-    fontSize: 14,
-    color: '#666',
+  pedidoFecha: {
+    fontSize: 12,
+    color: '#999',
     marginTop: 4,
   },
-  nuevoChip: {
-    backgroundColor: '#FFF3E0',
-    height: 32,
-  },
-  nuevoText: {
-    fontWeight: '600',
-    color: '#F57C00',
-  },
-  estadoChip: {
-    height: 32,
-  },
-  listoChip: {
-    backgroundColor: '#FFF3E0',
-  },
-  enCaminoChip: {
-    backgroundColor: '#E8F5E9',
-  },
-  estadoText: {
-    fontWeight: '600',
-  },
-  clienteInfo: {
-    marginBottom: 12,
-  },
-  clienteNombre: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 4,
-  },
-  clienteTelefono: {
-    fontSize: 14,
-    color: '#666',
-  },
-  contactoContainer: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 12,
-  },
-  contactoButton: {
-    flex: 1,
-    backgroundColor: '#2196F3',
-    padding: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  contactoButtonWhatsApp: {
-    flex: 1,
-    backgroundColor: '#25D366',
-    padding: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  contactoButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  direccionContainer: {
-    flexDirection: 'row',
-    backgroundColor: '#f9f9f9',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 12,
-  },
-  direccionIcon: {
-    fontSize: 20,
-    marginRight: 8,
-  },
-  direccionTexto: {
-    flex: 1,
-  },
-  direccion: {
-    fontSize: 15,
-    color: '#333',
-    fontWeight: '500',
-  },
-  referencia: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 4,
-  },
-  itemsContainer: {
-    backgroundColor: '#f9f9f9',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 12,
-  },
-  itemsTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 6,
-  },
-  item: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 4,
-  },
-  paymentContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  metodoPago: {
-    fontSize: 14,
-    color: '#666',
-  },
-  total: {
+  pedidoTotal: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#4CAF50',
+    color: '#FF6B35',
   },
-  actions: {
-    flexDirection: 'row',
-    gap: 8,
+  estadoBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    marginTop: 8,
   },
-  aceptarButton: {
-    flex: 2,
-    backgroundColor: '#4CAF50',
-    padding: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  aceptarButtonText: {
-    fontSize: 15,
+  estadoTexto: {
+    color: '#FFF',
+    fontSize: 12,
     fontWeight: 'bold',
-    color: '#fff',
   },
-  rechazarButton: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    padding: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#EF5350',
+  pedidoInfo: {
+    marginBottom: 12,
   },
-  rechazarButtonText: {
+  infoLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#EF5350',
+    color: '#666',
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  infoText: {
+    fontSize: 14,
+    color: '#333',
+  },
+  productoItem: {
+    fontSize: 14,
+    color: '#333',
+    marginLeft: 8,
+    marginVertical: 2,
+  },
+  pedidoActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
+  actionButton: {
+    flex: 1,
+    minWidth: '30%',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    elevation: 2,
+    marginTop: 8,
+  },
+  actionButtonText: {
+    color: '#FFF',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
+  acceptButton: {
+    backgroundColor: '#4CAF50',
+  },
+  rejectButton: {
+    backgroundColor: '#F44336',
+  },
+  callButton: {
+    backgroundColor: '#2196F3',
+  },
+  whatsappButton: {
+    backgroundColor: '#25D366',
   },
   mapButton: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#ddd',
+    backgroundColor: '#FF9800',
   },
-  mapButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-  },
-  startButton: {
-    flex: 1,
-    backgroundColor: '#4CAF50',
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  startButtonText: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#fff',
+  deliveryButton: {
+    backgroundColor: '#9C27B0',
+    width: '100%',
   },
   completeButton: {
-    flex: 1,
     backgroundColor: '#4CAF50',
-    padding: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  completeButtonText: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: '#fff',
+    width: '100%',
   },
   emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    paddingTop: 100,
+    justifyContent: 'center',
+    paddingVertical: 60,
   },
   emptyIcon: {
-    fontSize: 80,
+    fontSize: 64,
     marginBottom: 16,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
   },
   emptyText: {
     fontSize: 16,
-    color: '#666',
+    color: '#999',
     textAlign: 'center',
-  },
-  bottomPadding: {
-    height: 16,
   },
 });
