@@ -31,20 +31,17 @@ export default function CheckoutScreen({ route, navigation }) {
   const costoDelivery = 5;
   const total = subtotal + costoDelivery;
 
-  useEffect(() => {
-    cargarDatosUsuario();
-    cargarDatosIniciales();
-  }, []);
-
   // Escuchar cambios en los parámetros de navegación
   useEffect(() => {
     if (route.params?.direccionSeleccionada) {
+      console.log('✓ Dirección recibida del mapa:', route.params.direccionSeleccionada);
       setDireccion(route.params.direccionSeleccionada);
     }
     if (route.params?.coordenadas) {
+      console.log('✓ Coordenadas recibidas:', route.params.coordenadas);
       setUbicacionCoordenadas(route.params.coordenadas);
     }
-  }, [route.params?.direccionSeleccionada, route.params?.coordenadas]);
+  }, [route.params]);
 
   const cargarDatosIniciales = () => {
     // Cargar datos del pedido desde los parámetros de navegación
@@ -71,11 +68,18 @@ export default function CheckoutScreen({ route, navigation }) {
     }
   };
 
-  const abrirMapaPicker = () => {
-    // Pasar TODOS los datos actuales al mapa para no perderlos
+ const abrirMapaPicker = () => {
+    console.log('📍 Abriendo selector de mapa...');
+    console.log('Datos a pasar:', {
+      direccion,
+      carritoItems: carrito.length,
+      subtotal,
+      metodoPago
+    });
+    
+    // Navegar al mapa con los datos actuales
     navigation.navigate('MapPicker', {
       direccionInicial: direccion,
-      // Pasar datos del pedido para mantenerlos
       carritoData: carrito,
       subtotalData: subtotal,
       metodoPagoData: metodoPago,

@@ -1,4 +1,3 @@
-// firebaseConfig.js - Repartidores
 import { initializeApp } from 'firebase/app';
 import { initializeAuth, getReactNativePersistence } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
@@ -10,8 +9,8 @@ const firebaseConfig = {
   authDomain: "menu-delivery-arequipa.firebaseapp.com",
   projectId: "menu-delivery-arequipa",
   storageBucket: "menu-delivery-arequipa.firebasestorage.app",
-  messagingSenderId: "879680167790",  // ← CORREGIDO (quitado el 8 extra)
-  appId: "1:879680167790:web:b3c007019f35b305516b7f",  // ← CORREGIDO
+  messagingSenderId: "879680167790",
+  appId: "1:879680167790:web:b3c007019f35b305516b7f",
   measurementId: "G-9CV2R7J8W2"
 };
 

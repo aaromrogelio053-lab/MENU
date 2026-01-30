@@ -33,12 +33,21 @@ export default function MapPickerScreen({ route, navigation }) {
       const { status } = await Location.requestForegroundPermissionsAsync();
       
       if (status !== 'granted') {
-        Alert.alert('Permisos', 'Necesitamos permisos de ubicación para ayudarte');
+        Alert.alert(
+          'Permisos de ubicación',
+          'Necesitamos permisos de ubicación para ayudarte a seleccionar tu dirección.',
+          [
+            { text: 'Cancelar', onPress: () => navigation.goBack() },
+            { text: 'Dar permisos', onPress: () => obtenerUbicacionActual() }
+          ]
+        );
         setLoading(false);
         return;
       }
 
-      const location = await Location.getCurrentPositionAsync({});
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
       
       const newRegion = {
         latitude: location.coords.latitude,
@@ -59,7 +68,7 @@ export default function MapPickerScreen({ route, navigation }) {
       
     } catch (error) {
       console.error('Error obteniendo ubicación:', error);
-      Alert.alert('Error', 'No se pudo obtener tu ubicación actual');
+      Alert.alert('Error', 'No se pudo obtener tu ubicación actual. Puedes seleccionar manualmente en el mapa.');
     } finally {
       setLoading(false);
     }
@@ -132,7 +141,6 @@ export default function MapPickerScreen({ route, navigation }) {
       return;
     }
 
-    // ✅ CAMBIO AQUÍ: Usar replace en lugar de navigate para no acumular pantallas
     navigation.replace('Checkout', {
       direccionSeleccionada: direccionTexto,
       coordenadas: markerPosition,
@@ -166,6 +174,8 @@ export default function MapPickerScreen({ route, navigation }) {
         region={region}
         onRegionChangeComplete={setRegion}
         onPress={handleMapPress}
+        showsUserLocation={true}
+        showsMyLocationButton={true}
       >
         <Marker
           coordinate={markerPosition}

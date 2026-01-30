@@ -2,7 +2,7 @@
   "expo": {
     "name": "Tu Restaurante - Clientes",
     "slug": "tu-restaurante-cliente",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -16,7 +16,11 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.tuempresa.clienteapp"
+      "bundleIdentifier": "com.tuempresa.clienteapp",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicación para las entregas",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Necesitamos tu ubicación para las entregas"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -24,20 +28,22 @@
         "backgroundColor": "#ffffff"
       },
       "package": "com.tuempresa.clienteapp",
-      "versionCode": 1,
+      "versionCode": 2,
       "permissions": [
         "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION"
+        "ACCESS_COARSE_LOCATION",
+        "FOREGROUND_SERVICE"
       ]
     },
     "plugins": [
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Permitir acceso a tu ubicación para entregas."
+          "locationAlwaysAndWhenInUsePermission": "Permitir acceso a tu ubicación para entregas.",
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": true
         }
-      ],
-      "expo-font"
+      ]
     ],
     "extra": {
       "eas": {
