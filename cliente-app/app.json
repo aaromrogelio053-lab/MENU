@@ -4,8 +4,13 @@
     "slug": "tu-restaurante-cliente",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/logo.png",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
     "assetBundlePatterns": [
       "**/*"
     ],
@@ -31,7 +36,8 @@
         {
           "locationAlwaysAndWhenInUsePermission": "Permitir acceso a tu ubicación para entregas."
         }
-      ]
+      ],
+      "expo-font"
     ],
     "extra": {
       "eas": {
